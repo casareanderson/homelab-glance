@@ -1,16 +1,13 @@
-# homelab-glance — ready-to-flash build (ESP32-2432S028R "CYD"), ink-on-paper look.
-# Nothing secret is baked in: WiFi is set on-device (captive portal / Improv over USB),
-# and the warden token is pasted into the board's own web page after it joins WiFi.
-# It's stored in the ESP's flash, survives reboots, and is never shown back.
-# Until both are done the screen is a tap-through setup guide.
-# Also shows the next TfL buses (public API, no key) from the two stops below.
+# homelab-glance — ESP32-2432S028R "CYD" desk display, ink-on-paper look.
+# Reads ONE small JSON from glance-feed on Hermes over plain LAN HTTP (fast; no TLS,
+# no tokens on the board). Hermes does the slow work: warden, TfL, Beszel, Kuma,
+# backups, LAN scan. Tap the screen to flip pages: Warden / Buses / Homelab / Network.
+# WiFi: baked in by glance-home.yaml, or set on first boot (hotspot "homelab-glance setup").
 substitutions:
-  bus_line: "20"
-  bus_stop_a: "150042006003"   # Chandler Road, towards Loughton
-  bus_label_a: "to Loughton"
-  bus_stop_b: "150042006004"   # Chandler Road, towards Debden
-  bus_label_b: "to Debden"
+  feed_url: "http://192.168.8.120:8798/glance.json"
   bus_header: "BUS 20 - CHANDLER RD"
+  bus_label_a: "to Loughton"
+  bus_label_b: "to Debden"
   # Board preset (ESPHome mipi_spi). The CYD comes in three flavours:
   #   ESP32-2432S028-7789  micro-USB + USB-C, ST7789V   (default)
   #   ESP32-2432S028-9342  micro-USB + USB-C, ILI9342
@@ -36,13 +33,11 @@ wifi:
   ap:
     ssid: "homelab-glance setup"
   on_connect:
-    - delay: 3s
-    - script.execute: poll_warden
-    - script.execute: poll_bus
+    - delay: 2s
+    - script.execute: fetch
 captive_portal:
 improv_serial:
-# The setup page at http://homelab-glance.local (or the IP shown on screen):
-# paste the warden token there. Also lets you adjust the backlight.
+# Board page at http://homelab-glance.local: backlight + logs.
 web_server:
   port: 80
   version: 3
@@ -52,72 +47,15 @@ ota:
 time:
   - platform: sntp
     id: sntp_time
-text_sensor:
-  - platform: wifi_info
-    ip_address: {id: ip, internal: true}
-text:
-  - platform: template
-    id: warden_token
-    name: "Warden token"
-    icon: mdi:key
-    mode: password
-    optimistic: true
-    restore_value: true
-    max_length: 120
-    on_value:
-      - lambda: 'id(g_status) = 0;'
-      - script.execute: poll_warden
-button:
-  - platform: template
-    name: "Clear warden token"
-    on_press:
-      - text.set: {id: warden_token, value: ""}
 globals:
-  - {id: g_mode,   type: std::string, restore_value: no, initial_value: '"-"'}
-  - {id: g_wait,   type: int, restore_value: no, initial_value: '0'}
-  - {id: g_kev,    type: int, restore_value: no, initial_value: '0'}
-  - {id: g_status, type: int, restore_value: no, initial_value: '0'}  # last HTTP status, 0 = none yet
-  - {id: g_auth,   type: std::string, restore_value: no, initial_value: '""'}  # header buffer, never logged
-  # Next two arrivals per direction, in seconds as of g_bus_at (millis); -1 = none.
-  - {id: g_bus_a,  type: 'int[2]', restore_value: no, initial_value: '{-1, -1}'}
-  - {id: g_bus_b,  type: 'int[2]', restore_value: no, initial_value: '{-1, -1}'}
-  - {id: g_bus_at, type: uint32_t, restore_value: no, initial_value: '0'}
-  - {id: g_bus_ok, type: bool, restore_value: no, initial_value: 'false'}
-  - {id: g_page,   type: int, restore_value: no, initial_value: '0'}  # setup guide page (tap to advance)
+  - {id: g_feed,  type: std::string, restore_value: no, initial_value: '""'}  # last good feed JSON
+  - {id: g_ok,    type: bool, restore_value: no, initial_value: 'false'}      # last fetch worked
+  - {id: g_fetch, type: uint32_t, restore_value: no, initial_value: '0'}      # millis() of last good fetch
+  - {id: g_page,  type: int, restore_value: no, initial_value: '0'}           # 0 warden 1 buses 2 homelab 3 network
 http_request:
-  verify_ssl: false
-  timeout: 8s
+  timeout: 3s
 script:
-  - id: poll_warden
-    mode: single
-    then:
-      - if:
-          condition:
-            lambda: 'return wifi::global_wifi_component->is_connected() && !id(warden_token).state.empty();'
-          then:
-            - http_request.get:
-                url: "https://warden.cn1-lab.uk/api/v1/summary"
-                request_headers:
-                  Authorization: !lambda |-
-                    id(g_auth) = std::string("Bearer ") + id(warden_token).state;
-                    return id(g_auth).c_str();
-                capture_response: true
-                max_response_buffer_size: 8192
-                on_response:
-                  then:
-                    - lambda: |-
-                        id(g_status) = response->status_code;
-                        if (response->status_code != 200 || body.empty()) return;
-                        json::parse_json(body, [](JsonObject root) -> bool {
-                          id(g_mode) = (root["mode"] | "?");
-                          id(g_wait) = (root["kpi"]["approvals"] | 0);
-                          id(g_kev)  = (root["kpi"]["vuln_kev"] | 0);
-                          return true;
-                        });
-                on_error:
-                  then:
-                    - lambda: 'id(g_status) = -1;'
-  - id: poll_bus
+  - id: fetch
     mode: single
     then:
       - if:
@@ -125,57 +63,25 @@ script:
             lambda: 'return wifi::global_wifi_component->is_connected();'
           then:
             - http_request.get:
-                url: "https://api.tfl.gov.uk/StopPoint/${bus_stop_a}/Arrivals"
+                url: "${feed_url}"
                 capture_response: true
-                max_response_buffer_size: 8192
+                max_response_buffer_size: 4096
                 on_response:
                   then:
                     - lambda: |-
-                        id(g_bus_ok) = response->status_code == 200;
-                        if (!id(g_bus_ok)) return;
-                        int t[2] = {-1, -1};
-                        JsonDocument doc;
-                        if (deserializeJson(doc, body)) { id(g_bus_ok) = false; return; }
-                        for (JsonObject a : doc.as<JsonArray>()) {
-                          if (std::string(a["lineName"] | "") != "${bus_line}") continue;
-                          int v = a["timeToStation"] | -1;
-                          if (v < 0) continue;
-                          if (t[0] < 0 || v < t[0]) { t[1] = t[0]; t[0] = v; }
-                          else if (t[1] < 0 || v < t[1]) t[1] = v;
-                        }
-                        id(g_bus_a)[0] = t[0]; id(g_bus_a)[1] = t[1];
-                        id(g_bus_at) = millis();
+                        id(g_ok) = response->status_code == 200 && !body.empty() && body[0] == '{';
+                        if (!id(g_ok)) return;
+                        id(g_fetch) = millis();
+                        if (body == id(g_feed)) return;  // nothing changed: don't redraw (no blink)
+                        id(g_feed) = body;
+                        id(screen).update();
                 on_error:
                   then:
-                    - lambda: 'id(g_bus_ok) = false;'
-            - http_request.get:
-                url: "https://api.tfl.gov.uk/StopPoint/${bus_stop_b}/Arrivals"
-                capture_response: true
-                max_response_buffer_size: 8192
-                on_response:
-                  then:
-                    - lambda: |-
-                        if (response->status_code != 200) { id(g_bus_ok) = false; return; }
-                        int t[2] = {-1, -1};
-                        JsonDocument doc;
-                        if (deserializeJson(doc, body)) { id(g_bus_ok) = false; return; }
-                        for (JsonObject a : doc.as<JsonArray>()) {
-                          if (std::string(a["lineName"] | "") != "${bus_line}") continue;
-                          int v = a["timeToStation"] | -1;
-                          if (v < 0) continue;
-                          if (t[0] < 0 || v < t[0]) { t[1] = t[0]; t[0] = v; }
-                          else if (t[1] < 0 || v < t[1]) t[1] = v;
-                        }
-                        id(g_bus_b)[0] = t[0]; id(g_bus_b)[1] = t[1];
-                        id(g_bus_at) = millis();
-                on_error:
-                  then:
-                    - lambda: 'id(g_bus_ok) = false;'
+                    - lambda: 'id(g_ok) = false;'
 interval:
-  - interval: 60s
+  - interval: 30s
     then:
-      - script.execute: poll_warden
-      - script.execute: poll_bus
+      - script.execute: fetch
 font:
   - {file: "gfonts://Libre Baskerville", id: f_big, size: 38}
   - {file: "gfonts://Libre Baskerville", id: f_med, size: 20}
@@ -187,7 +93,8 @@ color:
   - {id: c_soft,  red: 47%, green: 45%, blue: 42%}
   - {id: c_red,   red: 70%, green: 16%, blue: 14%}
 output:
-  - {platform: ledc, pin: GPIO21, id: backlight_pwm}
+  # 20 kHz PWM: no visible backlight flicker at low brightness.
+  - {platform: ledc, pin: GPIO21, id: backlight_pwm, frequency: 20000Hz}
 light:
   - platform: monochromatic
     id: backlight
@@ -198,7 +105,7 @@ light:
 spi:
   - {id: tft, clk_pin: GPIO14, mosi_pin: GPIO13, miso_pin: GPIO12}
   - {id: touch_spi, clk_pin: GPIO25, mosi_pin: GPIO32, miso_pin: GPIO39}
-# Tap anywhere: next step in the setup guide, or refresh now once set up.
+# Tap anywhere: next page.
 touchscreen:
   - platform: xpt2046
     id: touch
@@ -208,15 +115,7 @@ touchscreen:
     display: screen
     calibration: {x_min: 280, x_max: 3860, y_min: 340, y_max: 3860}
     on_touch:
-      - lambda: |-
-          bool setup = !wifi::global_wifi_component->is_connected() || id(warden_token).state.empty();
-          if (setup) id(g_page) = (id(g_page) + 1) % 5;
-      - if:
-          condition:
-            lambda: 'return !id(warden_token).state.empty();'
-          then:
-            - script.execute: poll_warden
-      - script.execute: poll_bus
+      - lambda: 'id(g_page) = (id(g_page) + 1) % 4;'
       - component.update: screen
 display:
   # mipi_spi draws in strips (~20 KB buffer): a full 320x240 16-bit frame (150 KB)
@@ -227,99 +126,135 @@ display:
     invert_colors: ${invert_colors}
     spi_id: tft
     rotation: 270
-    update_interval: 15s   # slow, calm redraws — e-paper feel
+    update_interval: 60s   # only for the bus countdown; new data redraws straight away
     lambda: |-
       it.fill(id(c_paper));
-      it.print(16, 12, id(f_small), id(c_soft), "HOMELAB / WARDEN");
       auto now = id(sntp_time).now();
-      if (now.is_valid())
-        it.strftime(304, 12, id(f_small), id(c_soft), TextAlign::TOP_RIGHT, "%a %d %b", now);
-      it.line(16, 34, 304, 34, id(c_ink));
+      static const char *titles[] = {"WARDEN", "${bus_header}", "HOMELAB", "NETWORK"};
+      int pg = id(g_page);
 
-      // Setup guide: shown until the board is on WiFi AND has a token. Tap to page through.
-      bool wifi_ok = wifi::global_wifi_component->is_connected();
-      bool tok_ok = !id(warden_token).state.empty();
-      if (!wifi_ok || !tok_ok) {
-        int pg = id(g_page);
-        if (pg > 0) it.printf(304, 214, id(f_small), id(c_soft), TextAlign::TOP_RIGHT, "%d / 4", pg);
-        it.print(16, 214, id(f_small), id(c_soft), pg < 4 ? "tap for next" : "tap to start over");
-        if (pg == 0) {
-          it.print(16, 56, id(f_med), id(c_ink), "Hello.");
-          it.print(16, 92, id(f_small), id(c_soft), "Four quick steps to set");
-          it.print(16, 110, id(f_small), id(c_soft), "this display up.");
-          it.print(16, 140, id(f_small), id(c_ink), "Tap the screen to begin.");
-        } else if (pg == 1) {
-          it.print(16, 50, id(f_med), id(c_ink), "1. WiFi");
-          if (wifi_ok) {
-            it.print(16, 92, id(f_small), id(c_ink), "Done - on WiFi at");
-            it.printf(16, 110, id(f_small), id(c_ink), "%s", id(ip).state.c_str());
-          } else {
-            it.print(16, 92, id(f_small), id(c_soft), "On your phone, join WiFi");
-            it.print(16, 110, id(f_small), id(c_ink), "homelab-glance setup");
-            it.print(16, 128, id(f_small), id(c_soft), "then pick your home WiFi");
-            it.print(16, 146, id(f_small), id(c_soft), "and enter its password.");
-          }
-        } else if (pg == 2) {
-          it.print(16, 50, id(f_med), id(c_ink), "2. Make a token");
-          it.print(16, 92, id(f_small), id(c_soft), "In warden, go to");
-          it.print(16, 110, id(f_small), id(c_ink), "Settings > Connect");
-          it.print(16, 128, id(f_small), id(c_ink), "> New token");
-          it.print(16, 146, id(f_small), id(c_soft), "name it homelab-glance, copy it.");
-        } else if (pg == 3) {
-          it.print(16, 50, id(f_med), id(c_ink), "3. Paste it here");
-          it.print(16, 92, id(f_small), id(c_soft), "On the same WiFi, open");
-          if (wifi_ok) it.printf(16, 110, id(f_small), id(c_ink), "http://%s", id(ip).state.c_str());
-          it.print(16, 128, id(f_small), id(c_ink), "http://homelab-glance.local");
-          it.print(16, 146, id(f_small), id(c_soft), "paste into Warden token, Enter.");
-        } else {
-          it.print(16, 50, id(f_med), id(c_ink), "4. Done");
-          it.print(16, 92, id(f_small), id(c_soft), "Once WiFi + token are in,");
-          it.print(16, 110, id(f_small), id(c_soft), "this switches to the glance");
-          it.print(16, 128, id(f_small), id(c_soft), "by itself.");
-          if (!wifi_ok) it.print(16, 160, id(f_small), id(c_red), "Still waiting for WiFi.");
-          else it.print(16, 160, id(f_small), id(c_red), "Still waiting for the token.");
-        }
+      if (!wifi::global_wifi_component->is_connected()) {
+        it.print(16, 12, id(f_small), id(c_soft), "HOMELAB GLANCE");
+        it.line(16, 34, 304, 34, id(c_ink));
+        it.print(16, 56, id(f_med), id(c_ink), "Not on WiFi yet.");
+        it.print(16, 96, id(f_small), id(c_soft), "On your phone, join WiFi");
+        it.print(16, 114, id(f_small), id(c_ink), "homelab-glance setup");
+        it.print(16, 132, id(f_small), id(c_soft), "then pick your home WiFi.");
         return;
       }
 
-      // The glance: warden on top, buses below.
-      it.printf(16, 40, id(f_big), id(c_ink), "%d", id(g_wait));
-      it.print(16, 86, id(f_small), id(c_soft), "waiting for you");
-      it.printf(172, 40, id(f_big), id(g_kev) > 0 ? id(c_red) : id(c_ink), "%d", id(g_kev));
-      it.print(172, 86, id(f_small), id(c_soft), "known-exploited");
-      it.line(16, 108, 304, 108, id(c_soft));
+      it.print(16, 12, id(f_small), id(c_soft), titles[pg]);
+      if (now.is_valid())
+        it.strftime(304, 12, id(f_small), id(c_soft), TextAlign::TOP_RIGHT, "%a %d %b %H:%M", now);
+      it.line(16, 34, 304, 34, id(c_ink));
 
-      it.print(16, 114, id(f_small), id(c_soft), "${bus_header}");
-      // Count down between polls so minutes stay honest.
-      int gone = (millis() - id(g_bus_at)) / 1000;
-      auto fmt = [&](int *t, char *out) {
-        int n = 0; out[0] = 0;
-        for (int i = 0; i < 2; i++) {
-          if (t[i] < 0) continue;
-          int m = (t[i] - gone) / 60;
-          if (t[i] - gone < -30) continue;  // already left
-          n += snprintf(out + n, 24 - n, n ? ", %s" : "%s", m < 1 ? "due" : std::to_string(m).c_str());
-        }
-        if (!n) snprintf(out, 24, "none");
-        else if (strcmp(out, "due") != 0) strncat(out, " min", 24 - strlen(out) - 1);
+      // Footer: page dots + freshness.
+      for (int i = 0; i < 4; i++) {
+        if (i == pg) it.filled_circle(16 + i * 14, 222, 4, id(c_ink));
+        else it.circle(16 + i * 14, 222, 4, id(c_soft));
+      }
+      int age = id(g_fetch) ? (millis() - id(g_fetch)) / 1000 : -1;
+      if (id(g_feed).empty())
+        it.print(304, 214, id(f_small), id(c_soft), TextAlign::TOP_RIGHT, "waiting for Hermes...");
+      else if (!id(g_ok) && age > 120)
+        it.printf(304, 214, id(f_small), id(c_red), TextAlign::TOP_RIGHT, "Hermes offline %dm", age / 60);
+      else
+        it.print(304, 214, id(f_small), id(c_soft), TextAlign::TOP_RIGHT, "tap for next");
+      if (id(g_feed).empty()) return;
+
+      JsonDocument doc;
+      if (deserializeJson(doc, id(g_feed))) return;
+      // How old the feed's numbers are (feed's own clock), for the bus countdown.
+      long gone = now.is_valid() ? (long) now.timestamp - (long) (doc["gen"] | 0) : age;
+      if (gone < 0) gone = 0;
+
+      auto row = [&](int y, const char *label, const char *val, bool alert) {
+        it.print(16, y + 5, id(f_small), id(c_soft), label);
+        it.print(120, y, id(f_med), alert ? id(c_red) : id(c_ink), val);
       };
-      char a[24], b[24];
-      fmt(id(g_bus_a), a); fmt(id(g_bus_b), b);
-      it.print(16, 134, id(f_med), id(c_ink), "${bus_label_a}");
-      it.print(304, 134, id(f_med), id(c_ink), TextAlign::TOP_RIGHT, a);
-      it.print(16, 162, id(f_med), id(c_ink), "${bus_label_b}");
-      it.print(304, 162, id(f_med), id(c_ink), TextAlign::TOP_RIGHT, b);
-      it.line(16, 196, 304, 196, id(c_soft));
+      char v[48];
 
-      it.printf(16, 212, id(f_small), id(c_soft), "mode %s", id(g_mode).c_str());
-      int s = id(g_status);
-      if (s == 401 || s == 403)
-        it.print(304, 212, id(f_small), id(c_red), TextAlign::TOP_RIGHT, "token rejected");
-      else if (s != 200 && s != 0)
-        it.print(304, 212, id(f_small), id(c_red), TextAlign::TOP_RIGHT, "warden unreachable");
-      else if (!id(g_bus_ok) && id(g_bus_at) == 0)
-        it.print(304, 212, id(f_small), id(c_soft), TextAlign::TOP_RIGHT, "checking...");
-      else if (!id(g_bus_ok))
-        it.print(304, 212, id(f_small), id(c_red), TextAlign::TOP_RIGHT, "TfL unreachable");
-      else if (now.is_valid())
-        it.strftime(304, 212, id(f_small), id(c_soft), TextAlign::TOP_RIGHT, "updated %H:%M", now);
+      if (pg == 0) {
+        JsonObject w = doc["w"];
+        if (w.isNull()) { it.print(16, 60, id(f_med), id(c_red), "warden unreachable"); return; }
+        int kev = w["kev"] | 0;
+        it.printf(16, 44, id(f_big), id(c_ink), "%d", (int) (w["wait"] | 0));
+        it.print(16, 90, id(f_small), id(c_soft), "waiting for you");
+        it.printf(172, 44, id(f_big), kev > 0 ? id(c_red) : id(c_ink), "%d", kev);
+        it.print(172, 90, id(f_small), id(c_soft), "known-exploited");
+        it.line(16, 112, 304, 112, id(c_soft));
+        row(120, "mode", w["mode"] | "?", false);
+        snprintf(v, sizeof v, "%d open", (int) (w["find"] | 0));
+        row(148, "findings", v, false);
+        int hot = w["hot"] | 0;
+        snprintf(v, sizeof v, "%d", hot);
+        row(176, "hosts hot", v, hot > 0);
+      } else if (pg == 1) {
+        JsonObject b = doc["bus"];
+        if (b.isNull()) { it.print(16, 60, id(f_med), id(c_red), "TfL unreachable"); return; }
+        auto mins = [&](int t) { return (int) ((t - gone) / 60); };
+        auto dir = [&](int y, const char *label, JsonArray t) {
+          it.print(16, y, id(f_small), id(c_soft), label);
+          int t0 = t[0] | -1, t1 = t[1] | -1;
+          if (t0 >= 0 && t0 - gone < -30) { t0 = t1; t1 = -1; }  // first one has left
+          if (t0 < 0) { it.print(16, y + 18, id(f_med), id(c_soft), "no buses"); return; }
+          int m = mins(t0);
+          if (m < 1) it.print(16, y + 14, id(f_big), id(c_ink), "due");
+          else it.printf(16, y + 14, id(f_big), id(c_ink), "%d", m);
+          it.print(m < 1 ? 100 : (m < 10 ? 50 : 76), y + 34, id(f_small), id(c_soft), m < 1 ? "" : "min");
+          if (t1 >= 0) it.printf(304, y + 30, id(f_med), id(c_soft), TextAlign::TOP_RIGHT, "then %d min", mins(t1));
+        };
+        dir(44, "${bus_label_a}", b["a"]);
+        it.line(16, 122, 304, 122, id(c_soft));
+        dir(128, "${bus_label_b}", b["b"]);
+      } else if (pg == 2) {
+        JsonObject l = doc["lab"], k = doc["kuma"], bk = doc["bk"];
+        if (!l.isNull()) {
+          int up = l["up"] | 0, tot = l["total"] | 0;
+          snprintf(v, sizeof v, "%d/%d up", up, tot);
+          row(44, "nodes", v, up < tot);
+        }
+        if (!k.isNull()) {
+          int up = k["up"] | 0, tot = k["total"] | 0;
+          snprintf(v, sizeof v, "%d/%d up", up, tot);
+          row(72, "services", v, up < tot);
+        }
+        if (!bk.isNull()) {
+          int st = (bk["stale"] | 0) + (bk["missing"] | 0);
+          if (st) snprintf(v, sizeof v, "%d need a look", st);
+          else snprintf(v, sizeof v, "%d fresh", (int) (bk["fresh"] | 0));
+          row(100, "backups", v, st > 0);
+        }
+        const char *keys[] = {"cpu", "mem", "disk"};
+        for (int i = 0; i < 3; i++) {
+          JsonArray a = l[keys[i]];
+          if (a.isNull()) continue;
+          int pct = a[1] | 0;
+          snprintf(v, sizeof v, "%d%% %s", pct, (const char *) (a[0] | "?"));
+          row(128 + i * 26, i == 0 ? "busiest cpu" : (i == 1 ? "mem" : "disk"), v, pct >= 90);
+        }
+        // What's down, if anything (nodes first, then services).
+        std::string dn;
+        for (JsonVariant d : l["down"].as<JsonArray>()) { dn += dn.empty() ? "" : ", "; dn += d.as<const char *>(); }
+        for (JsonVariant d : k["down"].as<JsonArray>()) { dn += dn.empty() ? "" : ", "; dn += d.as<const char *>(); }
+        if (!dn.empty()) it.printf(16, 200, id(f_small), id(c_red), "down: %.36s", dn.c_str());
+      } else {
+        JsonObject n = doc["net"], w = doc["w"];
+        JsonObject in = n["inet"];
+        if (!in.isNull()) {
+          bool up = in["up"] | false;
+          if (up) snprintf(v, sizeof v, "up  %d ms", (int) (in["ms"] | 0));
+          else snprintf(v, sizeof v, "DOWN");
+          row(44, "internet", v, !up || (in["loss"] | 0) > 0);
+        }
+        if (!n["lan"].isNull()) {
+          snprintf(v, sizeof v, "%d on LAN", (int) (n["lan"]["devices"] | 0));
+          row(76, "devices", v, false);
+        }
+        if (!w.isNull()) {
+          snprintf(v, sizeof v, "%d", (int) (w["bans"] | 0));
+          row(108, "bans", v, false);
+          snprintf(v, sizeof v, "%d today", (int) (w["ev24"] | 0));
+          row(140, "events", v, false);
+        }
+      }

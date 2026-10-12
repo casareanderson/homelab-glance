@@ -1,0 +1,8 @@
+[Unit]
+Description=glance-feed: gather homelab facts for the desk display
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /root/.hermes/scripts/glance-feed.py
+TimeoutStartSec=170

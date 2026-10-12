@@ -1,73 +1,55 @@
 # homelab-glance
 
-A desk display for the homelab: an **ESP32-2432S028R ("Cheap Yellow Display", CYD)** —
-2.8" 320×240 ILI9341 + XPT2046 touch — showing your **warden** security status at a glance.
-No cloud; it polls warden's read-only REST API over the LAN.
+A desk display for the homelab: an **ESP32-2432S028R ("Cheap Yellow Display", CYD)**,
+2.8" 320×240 with touch, styled like e-ink (paper, black ink, one red ink, serif numbers, dim backlight).
+**Tap to flip pages:**
 
-Shows: **waiting for you** · **known-exploited CVEs** (in red ink when there are any) · warden **mode** · date and last update.
-Below that: the **next two TfL buses each way** from a nearby stop (default: route 20 at Chandler Road,
-to Loughton and to Debden). The minutes count down between polls (every 60 s); "due" means under a minute.
+| Page | Shows |
+|---|---|
+| **Warden** | waiting for you · known-exploited CVEs (red when > 0) · mode · open findings · hot hosts |
+| **Buses** | next TfL route 20 each way from Chandler Road (to Loughton / to Debden), counting down |
+| **Homelab** | nodes up (Beszel) · services up (Uptime Kuma) · backups fresh · busiest CPU / RAM / disk · what's down |
+| **Network** | internet up + ping · devices on the LAN · CrowdSec bans · warden events today |
 
-Styled like e-ink: paper background, black ink, one red ink, serif numbers, a dimmed backlight and slow redraws.
-It's still an LCD, so it glows; for true e-paper see the note at the bottom.
-
-## You need
-- The CYD board + a USB data cable. **No SD card** (the slot is optional/unused).
-- A Mac/PC with ESPHome to build & flash.
-
-## Build & flash (on your Mac)
-Nothing secret goes into the build: no `secrets.yaml`, no token on the command line.
-```bash
-python3 -m venv ~/esphome-venv && source ~/esphome-venv/bin/activate
-pip install esphome
-git clone git@github.com:casareanderson/homelab-glance.git
-cd homelab-glance
-esphome run glance-flash.yaml
+## How it works
 ```
-Pick the USB serial port (`/dev/cu.usbserial-…` / `/dev/cu.wchusbserial-…`). The first build downloads the ESP
-toolchain (a few GB, a few minutes). If it sticks on "Connecting…", hold the board's **BOOT** button.
-
-## Quickest: bake WiFi + token in (no on-device setup)
-```bash
-cp secrets.yaml.example secrets.yaml   # then fill in wifi_ssid, wifi_password, warden_token
-esphome run glance-home.yaml
+warden, TfL, Beszel, Kuma, backups, nmap ──> glance-feed (Hermes, every 60 s) ──> glance.json ──> board (every 30 s)
 ```
-`secrets.yaml` is gitignored. The board boots straight into the glance.
+The board makes **one plain-HTTP request on the LAN** (`http://192.168.8.120:8798/glance.json`, ~400 bytes).
+Hermes does all the slow work (TLS, logins, scans), so the board never blocks, which was what tripped the
+ESP's 5 s watchdog and made it restart and blink. **No tokens live on the board.** Slow sources are cached
+(Kuma and the LAN scan every 5 min, backups every 30 min), and a failing source just drops off its page.
+The screen only redraws when the data changes, plus once a minute for the bus countdown.
 
-## Setup — tap through it on the screen (if you flash glance-flash.yaml instead)
-After flashing, the display is a **4-step guide; tap anywhere for the next step**:
-1. **WiFi** — on your phone join **`homelab-glance setup`** and pick your home WiFi.
-2. **Make a token** — in warden: **Settings → Connect → New token** (name it `homelab-glance`), copy the `wdn_…`.
-3. **Paste it** — on the same WiFi open the address on screen (or `http://homelab-glance.local`),
-   paste into **Warden token**, press Enter.
-4. **Done** — it switches to the glance by itself.
+`feed/` holds the Hermes side: `glance-feed.py` + a systemd timer, and a tiny read-only LAN web server
+(`glance-feed-http.service`, bound to Hermes' LAN IP).
 
-The token is stored in the board's flash (survives reboots and re-flashes) and the web page never shows it back.
-To change it, paste a new one; **Clear warden token** on the same page puts the guide back.
-Once set up, a tap refreshes immediately; otherwise it polls every 60 s.
-
-Later updates go over WiFi, no cable needed: `esphome run glance-flash.yaml` and pick the network device.
+## Build & flash
+```bash
+python3 -m venv ~/esphome-venv && source ~/esphome-venv/bin/activate && pip install esphome
+gh repo clone casareanderson/homelab-glance && cd homelab-glance
+cp secrets.yaml.example secrets.yaml      # fill in wifi_ssid + wifi_password
+esphome run glance-home.yaml              # USB the first time, WiFi (OTA) after that
+```
+`secrets.yaml` is gitignored. `glance-flash.yaml` is the same build without WiFi baked in. On first boot it
+opens a hotspot, **homelab-glance setup**, so you can pick a network from your phone.
 
 ## Notes
-- **Bus stops** are the `substitutions:` at the top of `glance-flash.yaml`. Find yours with
-  `curl "https://api.tfl.gov.uk/StopPoint/?lat=LAT&lon=LON&stopTypes=NaptanPublicBusCoachTram&radius=400"`
-  and use the `naptanId`. The TfL API needs no key at this polling rate. Towards Loughton the 20 is signed
-  *Walthamstow Central*, which is why the label is set by hand.
-- **Network:** the board must reach `warden.cn1-lab.uk` (resolves to the LAN). Keep this trusted display on the
-  main LAN; if you put it on the IoT VLAN, allow it to warden's IP. Anyone on the LAN can open its page to
-  replace the token or adjust the backlight. They can't read the token back.
-- **Board variant:** the default is the two-USB CYD (micro-USB + USB-C, ST7789V). For other boards, override it
-  when flashing: `-s display_model ESP32-2432S028` (micro-USB only, ILI9341) or `-s display_model ESP32-2432S028-9342`.
-  Fuzzy static = wrong variant. If the paper looks dark or colours look negative, add `-s invert_colors true`.
+- **Board variant:** the default is the two-USB CYD (micro-USB + USB-C, ST7789V). Others:
+  `-s display_model ESP32-2432S028` (micro-USB only, ILI9341) or `-s display_model ESP32-2432S028-9342`.
+  Fuzzy static = wrong variant. Paper looks dark or colours look negative? Add `-s invert_colors true`.
 - The display uses ESPHome's `mipi_spi` driver, which draws in strips. A full-screen buffer won't fit in this
   ESP32's RAM ("Could not allocate buffer for display").
-  Taps only need to land *somewhere*, so touch calibration doesn't matter here.
-- **Backlight** starts at 40% for the paper look; adjust it on the board's web page.
-- The warden token is read-only (it can only *read* the console summary — never ban/patch/approve). Revoke it
-  any time in Settings → Connect; the screen will say **token rejected**.
-- `glance.yaml` + `ha/` are an alternative Home-Assistant-driven build if you'd rather route through HA
-  (that one uses `secrets.yaml`, see `secrets.yaml.example`).
-- **True e-paper:** the same polling works on a LilyGo T5 4.7" or a Waveshare e-paper + ESP32 with only the
-  `display:` block swapped. That gives no glow, readability in sunlight, and weeks on a battery.
+- The `gpio_pullup_en … input-only pad` line at boot is the touch IRQ pin (GPIO36) and is harmless.
+- **Bus stops / feed URL** are `substitutions:` at the top of `glance-flash.yaml` (labels) and constants at the
+  top of `feed/glance-feed.py` (stop IDs). Find stops with
+  `curl "https://api.tfl.gov.uk/StopPoint/?lat=LAT&lon=LON&stopTypes=NaptanPublicBusCoachTram&radius=400"`.
+- Not shown, on purpose: AdGuard stats (the GL.iNet build ties its API to the router UI session, 401) and
+  NetBird peers (it only counts peers with a live tunnel, so "1/9" would look like an outage).
+- The board's page (`http://homelab-glance.local`) has the backlight slider and live logs. It's LAN-only, and
+  OTA has no password, so keep the display on the trusted LAN.
+- `glance.yaml` + `ha/` are the older Home-Assistant-driven build.
+- **True e-paper:** the same feed works on a LilyGo T5 4.7" or a Waveshare e-paper + ESP32 with only the
+  `display:` block swapped.
 
 AGPL-3.0 · part of the C1 Lab homelab.

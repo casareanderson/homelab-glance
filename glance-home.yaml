@@ -1,16 +1,12 @@
-# homelab-glance with WiFi + warden token baked in at build time (no on-device setup).
+# homelab-glance with WiFi baked in at build time (no on-device setup).
 # Values come from secrets.yaml next to this file (gitignored — never committed):
 #   wifi_ssid: "YourWiFi"
 #   wifi_password: "..."
-#   warden_token: "wdn_..."      # just the token, no "Bearer "
 # Flash with:  esphome run glance-home.yaml
-# The setup hotspot still appears if the WiFi is unreachable, and a token pasted on the
-# board web page later still takes over (it is saved on the board).
+# No warden token is needed on the board any more: Hermes' glance-feed fetches everything.
+# The setup hotspot still appears if the WiFi is unreachable.
 packages:
   glance: !include glance-flash.yaml
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-text:
-  - id: !extend warden_token
-    initial_value: !secret warden_token
