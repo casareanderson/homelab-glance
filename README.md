@@ -27,7 +27,14 @@ esphome run glance-flash.yaml
 Pick the USB serial port (`/dev/cu.usbserial-…` / `/dev/cu.wchusbserial-…`). The first build downloads the ESP
 toolchain (a few GB, a few minutes). If it sticks on "Connecting…", hold the board's **BOOT** button.
 
-## Setup — tap through it on the screen
+## Quickest: bake WiFi + token in (no on-device setup)
+```bash
+cp secrets.yaml.example secrets.yaml   # then fill in wifi_ssid, wifi_password, warden_token
+esphome run glance-home.yaml
+```
+`secrets.yaml` is gitignored. The board boots straight into the glance.
+
+## Setup — tap through it on the screen (if you flash glance-flash.yaml instead)
 After flashing, the display is a **4-step guide; tap anywhere for the next step**:
 1. **WiFi** — on your phone join **`homelab-glance setup`** and pick your home WiFi.
 2. **Make a token** — in warden: **Settings → Connect → New token** (name it `homelab-glance`), copy the `wdn_…`.
