@@ -5,6 +5,8 @@ A desk display for the homelab: an **ESP32-2432S028R ("Cheap Yellow Display", CY
 No cloud; it polls warden's read-only REST API over the LAN.
 
 Shows: **waiting for you** · **known-exploited CVEs** (in red ink when there are any) · warden **mode** · date and last update.
+Below that: the **next two TfL buses each way** from a nearby stop (default: route 20 at Chandler Road,
+to Loughton and to Debden). The minutes count down between polls (every 60 s); "due" means under a minute.
 
 Styled like e-ink: paper background, black ink, one red ink, serif numbers, a dimmed backlight and slow redraws.
 It's still an LCD, so it glows; for true e-paper see the note at the bottom.
@@ -40,6 +42,10 @@ Once set up, a tap refreshes immediately; otherwise it polls every 60 s.
 Later updates go over WiFi, no cable needed: `esphome run glance-flash.yaml` and pick the network device.
 
 ## Notes
+- **Bus stops** are the `substitutions:` at the top of `glance-flash.yaml`. Find yours with
+  `curl "https://api.tfl.gov.uk/StopPoint/?lat=LAT&lon=LON&stopTypes=NaptanPublicBusCoachTram&radius=400"`
+  and use the `naptanId`. The TfL API needs no key at this polling rate. Towards Loughton the 20 is signed
+  *Walthamstow Central*, which is why the label is set by hand.
 - **Network:** the board must reach `warden.cn1-lab.uk` (resolves to the LAN). Keep this trusted display on the
   main LAN; if you put it on the IoT VLAN, allow it to warden's IP. Anyone on the LAN can open its page to
   replace the token or adjust the backlight. They can't read the token back.

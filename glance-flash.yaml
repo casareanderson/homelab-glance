@@ -3,6 +3,14 @@
 # and the warden token is pasted into the board's own web page after it joins WiFi.
 # It's stored in the ESP's flash, survives reboots, and is never shown back.
 # Until both are done the screen is a tap-through setup guide.
+# Also shows the next TfL buses (public API, no key) from the two stops below.
+substitutions:
+  bus_line: "20"
+  bus_stop_a: "150042006003"   # Chandler Road, towards Loughton
+  bus_label_a: "to Loughton"
+  bus_stop_b: "150042006004"   # Chandler Road, towards Debden
+  bus_label_b: "to Debden"
+  bus_header: "BUS 20 - CHANDLER RD"
 esphome:
   name: homelab-glance
   friendly_name: Homelab Glance
@@ -19,6 +27,10 @@ logger:
 wifi:
   ap:
     ssid: "homelab-glance setup"
+  on_connect:
+    - delay: 3s
+    - script.execute: poll_warden
+    - script.execute: poll_bus
 captive_portal:
 improv_serial:
 # The setup page at http://homelab-glance.local (or the IP shown on screen):
@@ -58,6 +70,11 @@ globals:
   - {id: g_kev,    type: int, restore_value: no, initial_value: '0'}
   - {id: g_status, type: int, restore_value: no, initial_value: '0'}  # last HTTP status, 0 = none yet
   - {id: g_auth,   type: std::string, restore_value: no, initial_value: '""'}  # header buffer, never logged
+  # Next two arrivals per direction, in seconds as of g_bus_at (millis); -1 = none.
+  - {id: g_bus_a,  type: 'int[2]', restore_value: no, initial_value: '{-1, -1}'}
+  - {id: g_bus_b,  type: 'int[2]', restore_value: no, initial_value: '{-1, -1}'}
+  - {id: g_bus_at, type: uint32_t, restore_value: no, initial_value: '0'}
+  - {id: g_bus_ok, type: bool, restore_value: no, initial_value: 'false'}
   - {id: g_page,   type: int, restore_value: no, initial_value: '0'}  # setup guide page (tap to advance)
 http_request:
   verify_ssl: false
@@ -77,6 +94,7 @@ script:
                     id(g_auth) = std::string("Bearer ") + id(warden_token).state;
                     return id(g_auth).c_str();
                 capture_response: true
+                max_response_buffer_size: 8192
                 on_response:
                   then:
                     - lambda: |-
@@ -91,12 +109,67 @@ script:
                 on_error:
                   then:
                     - lambda: 'id(g_status) = -1;'
+  - id: poll_bus
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: 'return wifi::global_wifi_component->is_connected();'
+          then:
+            - http_request.get:
+                url: "https://api.tfl.gov.uk/StopPoint/${bus_stop_a}/Arrivals"
+                capture_response: true
+                max_response_buffer_size: 8192
+                on_response:
+                  then:
+                    - lambda: |-
+                        id(g_bus_ok) = response->status_code == 200;
+                        if (!id(g_bus_ok)) return;
+                        int t[2] = {-1, -1};
+                        JsonDocument doc;
+                        if (deserializeJson(doc, body)) { id(g_bus_ok) = false; return; }
+                        for (JsonObject a : doc.as<JsonArray>()) {
+                          if (std::string(a["lineName"] | "") != "${bus_line}") continue;
+                          int v = a["timeToStation"] | -1;
+                          if (v < 0) continue;
+                          if (t[0] < 0 || v < t[0]) { t[1] = t[0]; t[0] = v; }
+                          else if (t[1] < 0 || v < t[1]) t[1] = v;
+                        }
+                        id(g_bus_a)[0] = t[0]; id(g_bus_a)[1] = t[1];
+                        id(g_bus_at) = millis();
+                on_error:
+                  then:
+                    - lambda: 'id(g_bus_ok) = false;'
+            - http_request.get:
+                url: "https://api.tfl.gov.uk/StopPoint/${bus_stop_b}/Arrivals"
+                capture_response: true
+                max_response_buffer_size: 8192
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code != 200) { id(g_bus_ok) = false; return; }
+                        int t[2] = {-1, -1};
+                        JsonDocument doc;
+                        if (deserializeJson(doc, body)) { id(g_bus_ok) = false; return; }
+                        for (JsonObject a : doc.as<JsonArray>()) {
+                          if (std::string(a["lineName"] | "") != "${bus_line}") continue;
+                          int v = a["timeToStation"] | -1;
+                          if (v < 0) continue;
+                          if (t[0] < 0 || v < t[0]) { t[1] = t[0]; t[0] = v; }
+                          else if (t[1] < 0 || v < t[1]) t[1] = v;
+                        }
+                        id(g_bus_b)[0] = t[0]; id(g_bus_b)[1] = t[1];
+                        id(g_bus_at) = millis();
+                on_error:
+                  then:
+                    - lambda: 'id(g_bus_ok) = false;'
 interval:
   - interval: 60s
     then:
       - script.execute: poll_warden
+      - script.execute: poll_bus
 font:
-  - {file: "gfonts://Libre Baskerville", id: f_big, size: 44}
+  - {file: "gfonts://Libre Baskerville", id: f_big, size: 38}
   - {file: "gfonts://Libre Baskerville", id: f_med, size: 20}
   - {file: "gfonts://IBM Plex Mono", id: f_small, size: 13}
 # Paper, ink, faded ink, and one red ink (like a black/white/red e-paper panel).
@@ -135,6 +208,7 @@ touchscreen:
             lambda: 'return !id(warden_token).state.empty();'
           then:
             - script.execute: poll_warden
+      - script.execute: poll_bus
       - component.update: screen
 display:
   - platform: ili9xxx
@@ -200,21 +274,44 @@ display:
         return;
       }
 
-      // The glance.
-      it.printf(16, 44, id(f_big), id(c_ink), "%d", id(g_wait));
-      it.print(16, 102, id(f_small), id(c_soft), "waiting for you");
-      it.printf(172, 44, id(f_big), id(g_kev) > 0 ? id(c_red) : id(c_ink), "%d", id(g_kev));
-      it.print(172, 102, id(f_small), id(c_soft), "known-exploited");
-      it.line(16, 130, 304, 130, id(c_soft));
-      it.printf(16, 144, id(f_med), id(c_ink), "%s", id(g_mode).c_str());
-      it.print(16, 172, id(f_small), id(c_soft), "mode");
+      // The glance: warden on top, buses below.
+      it.printf(16, 40, id(f_big), id(c_ink), "%d", id(g_wait));
+      it.print(16, 86, id(f_small), id(c_soft), "waiting for you");
+      it.printf(172, 40, id(f_big), id(g_kev) > 0 ? id(c_red) : id(c_ink), "%d", id(g_kev));
+      it.print(172, 86, id(f_small), id(c_soft), "known-exploited");
+      it.line(16, 108, 304, 108, id(c_soft));
 
+      it.print(16, 114, id(f_small), id(c_soft), "${bus_header}");
+      // Count down between polls so minutes stay honest.
+      int gone = (millis() - id(g_bus_at)) / 1000;
+      auto fmt = [&](int *t, char *out) {
+        int n = 0; out[0] = 0;
+        for (int i = 0; i < 2; i++) {
+          if (t[i] < 0) continue;
+          int m = (t[i] - gone) / 60;
+          if (t[i] - gone < -30) continue;  // already left
+          n += snprintf(out + n, 24 - n, n ? ", %s" : "%s", m < 1 ? "due" : std::to_string(m).c_str());
+        }
+        if (!n) snprintf(out, 24, "none");
+        else if (strcmp(out, "due") != 0) strncat(out, " min", 24 - strlen(out) - 1);
+      };
+      char a[24], b[24];
+      fmt(id(g_bus_a), a); fmt(id(g_bus_b), b);
+      it.print(16, 134, id(f_med), id(c_ink), "${bus_label_a}");
+      it.print(304, 134, id(f_med), id(c_ink), TextAlign::TOP_RIGHT, a);
+      it.print(16, 162, id(f_med), id(c_ink), "${bus_label_b}");
+      it.print(304, 162, id(f_med), id(c_ink), TextAlign::TOP_RIGHT, b);
+      it.line(16, 196, 304, 196, id(c_soft));
+
+      it.printf(16, 212, id(f_small), id(c_soft), "mode %s", id(g_mode).c_str());
       int s = id(g_status);
-      if (s == 200 && now.is_valid())
-        it.strftime(16, 212, id(f_small), id(c_soft), "updated %H:%M", now);
-      else if (s == 401 || s == 403)
-        it.print(16, 212, id(f_small), id(c_red), "token rejected - paste a new one");
-      else if (s == 0)
-        it.print(16, 212, id(f_small), id(c_soft), "checking warden...");
-      else
-        it.print(16, 212, id(f_small), id(c_red), "can't reach warden");
+      if (s == 401 || s == 403)
+        it.print(304, 212, id(f_small), id(c_red), TextAlign::TOP_RIGHT, "token rejected");
+      else if (s != 200 && s != 0)
+        it.print(304, 212, id(f_small), id(c_red), TextAlign::TOP_RIGHT, "warden unreachable");
+      else if (!id(g_bus_ok) && id(g_bus_at) == 0)
+        it.print(304, 212, id(f_small), id(c_soft), TextAlign::TOP_RIGHT, "checking...");
+      else if (!id(g_bus_ok))
+        it.print(304, 212, id(f_small), id(c_red), TextAlign::TOP_RIGHT, "TfL unreachable");
+      else if (now.is_valid())
+        it.strftime(304, 212, id(f_small), id(c_soft), TextAlign::TOP_RIGHT, "updated %H:%M", now);
