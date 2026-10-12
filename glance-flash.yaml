@@ -1,0 +1,87 @@
+# homelab-glance — ready-to-flash build (ESP32-2432S028R "CYD")
+# WiFi provisioned on-device (captive portal + Improv over USB); warden polled
+# directly over the LAN with a read-only token baked in at build time.
+esphome:
+  name: homelab-glance
+  friendly_name: Homelab Glance
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+logger:
+  level: INFO
+wifi:
+  ap:
+    ssid: "homelab-glance setup"
+captive_portal:
+improv_serial:
+time:
+  - platform: sntp
+    id: sntp_time
+globals:
+  - {id: g_mode, type: std::string, restore_value: no, initial_value: '"…"'}
+  - {id: g_wait, type: int, restore_value: no, initial_value: '0'}
+  - {id: g_kev,  type: int, restore_value: no, initial_value: '0'}
+  - {id: g_ok,   type: bool, restore_value: no, initial_value: 'false'}
+http_request:
+  verify_ssl: false
+  timeout: 8s
+interval:
+  - interval: 30s
+    then:
+      - http_request.get:
+          url: "https://warden.cn1-lab.uk/api/v1/summary"
+          request_headers:
+            Authorization: !secret warden_auth
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  if (body.empty()) { id(g_ok) = false; return; }
+                  json::parse_json(body, [](JsonObject root) -> bool {
+                    id(g_mode) = (root["mode"] | "?");
+                    id(g_wait) = (root["kpi"]["approvals"] | 0);
+                    id(g_kev)  = (root["kpi"]["vuln_kev"] | 0);
+                    id(g_ok)   = true;
+                    return true;
+                  });
+font:
+  - {file: "gfonts://Roboto", id: f_big, size: 40}
+  - {file: "gfonts://Roboto", id: f_med, size: 22}
+  - {file: "gfonts://Roboto", id: f_small, size: 14}
+color:
+  - {id: c_fg,  red: 90%, green: 93%, blue: 95%}
+  - {id: c_dim, red: 55%, green: 59%, blue: 62%}
+  - {id: c_red, red: 97%, green: 32%, blue: 29%}
+  - {id: c_amb, red: 82%, green: 60%, blue: 13%}
+  - {id: c_grn, red: 25%, green: 73%, blue: 31%}
+  - {id: c_acc, red: 35%, green: 65%, blue: 100%}
+output:
+  - {platform: ledc, pin: GPIO21, id: backlight_pwm}
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: Backlight
+    restore_mode: ALWAYS_ON
+spi:
+  - {id: tft, clk_pin: GPIO14, mosi_pin: GPIO13, miso_pin: GPIO12}
+display:
+  - platform: ili9xxx
+    model: ili9341
+    invert_colors: false
+    spi_id: tft
+    cs_pin: GPIO15
+    dc_pin: GPIO2
+    rotation: 270
+    update_interval: 2s
+    lambda: |-
+      it.fill(Color::BLACK);
+      it.printf(12, 8, id(f_small), id(c_acc), "C1 LAB  -  warden");
+      std::string m = id(g_mode);
+      it.printf(12, 30, id(f_med), m == "enforcing" ? id(c_amb) : id(c_grn), "%s", m.c_str());
+      it.printf(12, 70, id(f_big), id(g_wait) > 0 ? id(c_amb) : id(c_dim), "%d", id(g_wait));
+      it.printf(86, 92, id(f_small), id(c_dim), "waiting for you");
+      it.printf(12, 132, id(f_big), id(g_kev) > 0 ? id(c_red) : id(c_grn), "%d", id(g_kev));
+      it.printf(86, 154, id(f_small), id(c_dim), "known-exploited CVEs");
+      it.strftime(12, 214, id(f_small), id(c_dim), "%a %d %b  %H:%M", id(sntp_time).now());
+      if (!id(g_ok)) it.printf(308, 8, id(f_small), id(c_red), TextAlign::TOP_RIGHT, "offline");
