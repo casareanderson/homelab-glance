@@ -28,7 +28,7 @@ TFL = "https://api.tfl.gov.uk/StopPoint/{}/Arrivals"
 BUS_LINE = "20"
 BUS_STOPS = {"a": "150042006003", "b": "150042006004"}  # Chandler Rd: to Loughton / to Debden
 LAN = "192.168.8.0/24"
-SLOW = {"kuma": 300, "backup": 1800, "lan": 300}  # seconds between refreshes
+SLOW = {"kuma": 300, "backup": 1800, "lan": 300, "patches": 900}  # seconds between refreshes
 
 
 def warden_token():
@@ -50,6 +50,17 @@ def warden():
     return {"mode": d.get("mode", "?"), "wait": k.get("approvals", 0), "kev": k.get("vuln_kev", 0),
             "bans": k.get("bans", 0), "ev24": k.get("events_24h", 0), "find": k.get("findings_open", 0),
             "hot": hh.get("hot", 0)}
+
+
+def patches():
+    """Pending package updates + reboots, from warden's vulns view (it scans every host daily)."""
+    r = requests.get(WARDEN.replace("/summary", "/vulns"),
+                     headers={"Authorization": f"Bearer {warden_token()}"}, timeout=20)
+    r.raise_for_status()
+    ts = r.json().get("targets", [])
+    upg = [t for t in ts if (t.get("upgradable") or 0) > 0]
+    reb = [t["name"][:12] for t in ts if t.get("reboot_required")]
+    return {"pending": sum(t["upgradable"] for t in upg), "hosts": len(upg), "reboot": reb[:3], "n_reboot": len(reb)}
 
 
 def buses():
@@ -148,6 +159,7 @@ def main():
         "lab": safe(lab),
         "kuma": cache["kuma"]["v"],
         "bk": cache["backup"]["v"],
+        "pt": cache["patches"]["v"],
         "net": {"inet": safe(internet), "lan": cache["lan"]["v"]},
     }
     json.dump(cache, open(CACHE + ".tmp", "w"))

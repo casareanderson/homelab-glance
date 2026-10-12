@@ -44,6 +44,17 @@ web_server:
 # Over-the-air updates after the first USB flash (LAN only).
 ota:
   - platform: esphome
+# Health: reset reason + memory, visible on the board's page (survive a crash).
+debug:
+  update_interval: 15s
+text_sensor:
+  - platform: debug
+    reset_reason: {name: "Reset reason"}
+sensor:
+  - platform: debug
+    free: {name: "Heap free"}
+    block: {name: "Heap largest block"}
+    loop_time: {name: "Loop time"}
 time:
   - platform: sntp
     id: sntp_time
@@ -183,12 +194,18 @@ display:
         it.printf(172, 44, id(f_big), kev > 0 ? id(c_red) : id(c_ink), "%d", kev);
         it.print(172, 90, id(f_small), id(c_soft), "known-exploited");
         it.line(16, 112, 304, 112, id(c_soft));
-        row(120, "mode", w["mode"] | "?", false);
+        row(116, "mode", w["mode"] | "?", false);
         snprintf(v, sizeof v, "%d open", (int) (w["find"] | 0));
-        row(148, "findings", v, false);
-        int hot = w["hot"] | 0;
-        snprintf(v, sizeof v, "%d", hot);
-        row(176, "hosts hot", v, hot > 0);
+        row(140, "findings", v, false);
+        JsonObject pt = doc["pt"];
+        if (!pt.isNull()) {
+          int pend = pt["pending"] | 0, nr = pt["n_reboot"] | 0;
+          snprintf(v, sizeof v, "%d pending", pend);
+          row(164, "patches", v, false);
+          if (nr) snprintf(v, sizeof v, "%d %s", nr, (const char *) (pt["reboot"][0] | "?"));
+          else snprintf(v, sizeof v, "none needed");
+          row(188, "reboots", v, nr > 0);
+        }
       } else if (pg == 1) {
         JsonObject b = doc["bus"];
         if (b.isNull()) { it.print(16, 60, id(f_med), id(c_red), "TfL unreachable"); return; }
