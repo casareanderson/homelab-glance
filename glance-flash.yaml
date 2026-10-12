@@ -11,6 +11,11 @@ substitutions:
   bus_stop_b: "150042006004"   # Chandler Road, towards Debden
   bus_label_b: "to Debden"
   bus_header: "BUS 20 - CHANDLER RD"
+  # Display chip. 1-USB CYD = ili9341. 2-USB CYD (micro-USB + USB-C) = st7789v:
+  #   esphome -s display_model st7789v run glance-flash.yaml
+  # Paper looks dark / colours look negative? add -s invert_colors true (or false).
+  display_model: ili9341
+  invert_colors: "false"
 esphome:
   name: homelab-glance
   friendly_name: Homelab Glance
@@ -213,8 +218,8 @@ touchscreen:
 display:
   - platform: ili9xxx
     id: screen
-    model: ili9341
-    invert_colors: false
+    model: ${display_model}
+    invert_colors: ${invert_colors}
     spi_id: tft
     cs_pin: GPIO15
     dc_pin: GPIO2
