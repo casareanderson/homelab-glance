@@ -11,10 +11,13 @@ substitutions:
   bus_stop_b: "150042006004"   # Chandler Road, towards Debden
   bus_label_b: "to Debden"
   bus_header: "BUS 20 - CHANDLER RD"
-  # Display chip. 1-USB CYD = ili9341. 2-USB CYD (micro-USB + USB-C) = st7789v:
-  #   esphome -s display_model st7789v run glance-flash.yaml
+  # Board preset (ESPHome mipi_spi). The CYD comes in three flavours:
+  #   ESP32-2432S028-7789  micro-USB + USB-C, ST7789V   (default)
+  #   ESP32-2432S028-9342  micro-USB + USB-C, ILI9342
+  #   ESP32-2432S028       micro-USB only,    ILI9341
+  # Override without editing: esphome -s display_model ESP32-2432S028 run glance-flash.yaml
   # Paper looks dark / colours look negative? add -s invert_colors true (or false).
-  display_model: ili9341
+  display_model: ESP32-2432S028-7789
   invert_colors: "false"
 esphome:
   name: homelab-glance
@@ -216,13 +219,13 @@ touchscreen:
       - script.execute: poll_bus
       - component.update: screen
 display:
-  - platform: ili9xxx
+  # mipi_spi draws in strips (~20 KB buffer): a full 320x240 16-bit frame (150 KB)
+  # doesn't fit in RAM on this PSRAM-less ESP32 ("Could not allocate buffer for display").
+  - platform: mipi_spi
     id: screen
     model: ${display_model}
     invert_colors: ${invert_colors}
     spi_id: tft
-    cs_pin: GPIO15
-    dc_pin: GPIO2
     rotation: 270
     update_interval: 15s   # slow, calm redraws — e-paper feel
     lambda: |-

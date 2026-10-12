@@ -49,9 +49,11 @@ Later updates go over WiFi, no cable needed: `esphome run glance-flash.yaml` and
 - **Network:** the board must reach `warden.cn1-lab.uk` (resolves to the LAN). Keep this trusted display on the
   main LAN; if you put it on the IoT VLAN, allow it to warden's IP. Anyone on the LAN can open its page to
   replace the token or adjust the backlight. They can't read the token back.
-- **Two-USB CYD (micro-USB + USB-C)** has an ST7789 display, not the ILI9341. If the screen is just fuzzy static,
-  flash with `esphome -s display_model st7789v run glance-flash.yaml`. If the paper looks dark or colours look
-  negative, add `-s invert_colors true`.
+- **Board variant:** the default is the two-USB CYD (micro-USB + USB-C, ST7789V). For other boards, override it
+  when flashing: `-s display_model ESP32-2432S028` (micro-USB only, ILI9341) or `-s display_model ESP32-2432S028-9342`.
+  Fuzzy static = wrong variant. If the paper looks dark or colours look negative, add `-s invert_colors true`.
+- The display uses ESPHome's `mipi_spi` driver, which draws in strips. A full-screen buffer won't fit in this
+  ESP32's RAM ("Could not allocate buffer for display").
   Taps only need to land *somewhere*, so touch calibration doesn't matter here.
 - **Backlight** starts at 40% for the paper look; adjust it on the board's web page.
 - The warden token is read-only (it can only *read* the console summary — never ban/patch/approve). Revoke it
