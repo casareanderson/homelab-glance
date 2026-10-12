@@ -1,0 +1,36 @@
+# Home Assistant: warden sensors for homelab-glance.
+# Add to configuration.yaml via  packages: !include_dir_named packages   (file in packages/)
+# or paste these blocks in directly. Needs  warden_bearer: "Bearer wdn_..."  in HA secrets.yaml.
+#
+# warden's /api/v1 skips SSO (bearer-token auth), so this works on the LAN.
+
+rest:
+  - resource: "https://warden.cn1-lab.uk/api/v1/summary"
+    scan_interval: 60
+    headers:
+      Authorization: !secret warden_bearer
+    sensor:
+      - name: "warden waiting"
+        unique_id: warden_waiting
+        value_template: "{{ value_json.kpi.approvals | int(0) }}"
+        state_class: measurement
+        icon: mdi:bell-ring
+      - name: "warden known-exploited CVEs"
+        unique_id: warden_kev
+        value_template: "{{ value_json.kpi.vuln_kev | int(0) }}"
+        state_class: measurement
+        icon: mdi:shield-alert
+      - name: "warden IDS alerts 24h"
+        unique_id: warden_ids_24h
+        value_template: "{{ value_json.kpi.ids_24h | int(0) }}"
+        icon: mdi:radar
+    binary_sensor: []
+  - resource: "https://warden.cn1-lab.uk/api/v1/summary"
+    scan_interval: 60
+    headers:
+      Authorization: !secret warden_bearer
+    sensor:
+      - name: "warden mode"
+        unique_id: warden_mode
+        value_template: "{{ value_json.mode }}"   # detect-only / enforcing
+        icon: mdi:eye
