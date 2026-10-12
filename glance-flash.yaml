@@ -1,9 +1,15 @@
-# homelab-glance — ready-to-flash build (ESP32-2432S028R "CYD")
-# WiFi provisioned on-device (captive portal + Improv over USB); warden polled
-# directly over the LAN with a read-only token baked in at build time.
+# homelab-glance — ready-to-flash build (ESP32-2432S028R "CYD"), ink-on-paper look.
+# Nothing secret is baked in: WiFi is set on-device (captive portal / Improv over USB),
+# and the warden token is pasted into the board's own web page after it joins WiFi.
+# It's stored in the ESP's flash, survives reboots, and is never shown back.
+# Until both are done the screen is a tap-through setup guide.
 esphome:
   name: homelab-glance
   friendly_name: Homelab Glance
+  on_boot:
+    priority: 600
+    then:
+      - light.turn_on: {id: backlight, brightness: 40%}
 esp32:
   board: esp32dev
   framework:
@@ -15,73 +21,200 @@ wifi:
     ssid: "homelab-glance setup"
 captive_portal:
 improv_serial:
+# The setup page at http://homelab-glance.local (or the IP shown on screen):
+# paste the warden token there. Also lets you adjust the backlight.
+web_server:
+  port: 80
+  version: 3
+# Over-the-air updates after the first USB flash (LAN only).
+ota:
+  - platform: esphome
 time:
   - platform: sntp
     id: sntp_time
+text_sensor:
+  - platform: wifi_info
+    ip_address: {id: ip, internal: true}
+text:
+  - platform: template
+    id: warden_token
+    name: "Warden token"
+    icon: mdi:key
+    mode: password
+    optimistic: true
+    restore_value: true
+    max_length: 120
+    on_value:
+      - lambda: 'id(g_status) = 0;'
+      - script.execute: poll_warden
+button:
+  - platform: template
+    name: "Clear warden token"
+    on_press:
+      - text.set: {id: warden_token, value: ""}
 globals:
-  - {id: g_mode, type: std::string, restore_value: no, initial_value: '"…"'}
-  - {id: g_wait, type: int, restore_value: no, initial_value: '0'}
-  - {id: g_kev,  type: int, restore_value: no, initial_value: '0'}
-  - {id: g_ok,   type: bool, restore_value: no, initial_value: 'false'}
+  - {id: g_mode,   type: std::string, restore_value: no, initial_value: '"-"'}
+  - {id: g_wait,   type: int, restore_value: no, initial_value: '0'}
+  - {id: g_kev,    type: int, restore_value: no, initial_value: '0'}
+  - {id: g_status, type: int, restore_value: no, initial_value: '0'}  # last HTTP status, 0 = none yet
+  - {id: g_auth,   type: std::string, restore_value: no, initial_value: '""'}  # header buffer, never logged
+  - {id: g_page,   type: int, restore_value: no, initial_value: '0'}  # setup guide page (tap to advance)
 http_request:
   verify_ssl: false
   timeout: 8s
-interval:
-  - interval: 30s
+script:
+  - id: poll_warden
+    mode: single
     then:
-      - http_request.get:
-          url: "https://warden.cn1-lab.uk/api/v1/summary"
-          request_headers:
-            Authorization: !secret warden_auth
-          capture_response: true
-          on_response:
-            then:
-              - lambda: |-
-                  if (body.empty()) { id(g_ok) = false; return; }
-                  json::parse_json(body, [](JsonObject root) -> bool {
-                    id(g_mode) = (root["mode"] | "?");
-                    id(g_wait) = (root["kpi"]["approvals"] | 0);
-                    id(g_kev)  = (root["kpi"]["vuln_kev"] | 0);
-                    id(g_ok)   = true;
-                    return true;
-                  });
+      - if:
+          condition:
+            lambda: 'return wifi::global_wifi_component->is_connected() && !id(warden_token).state.empty();'
+          then:
+            - http_request.get:
+                url: "https://warden.cn1-lab.uk/api/v1/summary"
+                request_headers:
+                  Authorization: !lambda |-
+                    id(g_auth) = std::string("Bearer ") + id(warden_token).state;
+                    return id(g_auth).c_str();
+                capture_response: true
+                on_response:
+                  then:
+                    - lambda: |-
+                        id(g_status) = response->status_code;
+                        if (response->status_code != 200 || body.empty()) return;
+                        json::parse_json(body, [](JsonObject root) -> bool {
+                          id(g_mode) = (root["mode"] | "?");
+                          id(g_wait) = (root["kpi"]["approvals"] | 0);
+                          id(g_kev)  = (root["kpi"]["vuln_kev"] | 0);
+                          return true;
+                        });
+                on_error:
+                  then:
+                    - lambda: 'id(g_status) = -1;'
+interval:
+  - interval: 60s
+    then:
+      - script.execute: poll_warden
 font:
-  - {file: "gfonts://Roboto", id: f_big, size: 40}
-  - {file: "gfonts://Roboto", id: f_med, size: 22}
-  - {file: "gfonts://Roboto", id: f_small, size: 14}
+  - {file: "gfonts://Libre Baskerville", id: f_big, size: 44}
+  - {file: "gfonts://Libre Baskerville", id: f_med, size: 20}
+  - {file: "gfonts://IBM Plex Mono", id: f_small, size: 13}
+# Paper, ink, faded ink, and one red ink (like a black/white/red e-paper panel).
 color:
-  - {id: c_fg,  red: 90%, green: 93%, blue: 95%}
-  - {id: c_dim, red: 55%, green: 59%, blue: 62%}
-  - {id: c_red, red: 97%, green: 32%, blue: 29%}
-  - {id: c_amb, red: 82%, green: 60%, blue: 13%}
-  - {id: c_grn, red: 25%, green: 73%, blue: 31%}
-  - {id: c_acc, red: 35%, green: 65%, blue: 100%}
+  - {id: c_paper, red: 93%, green: 91%, blue: 86%}
+  - {id: c_ink,   red: 11%, green: 11%, blue: 11%}
+  - {id: c_soft,  red: 47%, green: 45%, blue: 42%}
+  - {id: c_red,   red: 70%, green: 16%, blue: 14%}
 output:
   - {platform: ledc, pin: GPIO21, id: backlight_pwm}
 light:
   - platform: monochromatic
+    id: backlight
     output: backlight_pwm
     name: Backlight
     restore_mode: ALWAYS_ON
+    default_transition_length: 0s
 spi:
   - {id: tft, clk_pin: GPIO14, mosi_pin: GPIO13, miso_pin: GPIO12}
+  - {id: touch_spi, clk_pin: GPIO25, mosi_pin: GPIO32, miso_pin: GPIO39}
+# Tap anywhere: next step in the setup guide, or refresh now once set up.
+touchscreen:
+  - platform: xpt2046
+    id: touch
+    spi_id: touch_spi
+    cs_pin: GPIO33
+    interrupt_pin: GPIO36
+    display: screen
+    calibration: {x_min: 280, x_max: 3860, y_min: 340, y_max: 3860}
+    on_touch:
+      - lambda: |-
+          bool setup = !wifi::global_wifi_component->is_connected() || id(warden_token).state.empty();
+          if (setup) id(g_page) = (id(g_page) + 1) % 5;
+      - if:
+          condition:
+            lambda: 'return !id(warden_token).state.empty();'
+          then:
+            - script.execute: poll_warden
+      - component.update: screen
 display:
   - platform: ili9xxx
+    id: screen
     model: ili9341
     invert_colors: false
     spi_id: tft
     cs_pin: GPIO15
     dc_pin: GPIO2
     rotation: 270
-    update_interval: 2s
+    update_interval: 15s   # slow, calm redraws — e-paper feel
     lambda: |-
-      it.fill(Color::BLACK);
-      it.printf(12, 8, id(f_small), id(c_acc), "C1 LAB  -  warden");
-      std::string m = id(g_mode);
-      it.printf(12, 30, id(f_med), m == "enforcing" ? id(c_amb) : id(c_grn), "%s", m.c_str());
-      it.printf(12, 70, id(f_big), id(g_wait) > 0 ? id(c_amb) : id(c_dim), "%d", id(g_wait));
-      it.printf(86, 92, id(f_small), id(c_dim), "waiting for you");
-      it.printf(12, 132, id(f_big), id(g_kev) > 0 ? id(c_red) : id(c_grn), "%d", id(g_kev));
-      it.printf(86, 154, id(f_small), id(c_dim), "known-exploited CVEs");
-      it.strftime(12, 214, id(f_small), id(c_dim), "%a %d %b  %H:%M", id(sntp_time).now());
-      if (!id(g_ok)) it.printf(308, 8, id(f_small), id(c_red), TextAlign::TOP_RIGHT, "offline");
+      it.fill(id(c_paper));
+      it.print(16, 12, id(f_small), id(c_soft), "HOMELAB / WARDEN");
+      auto now = id(sntp_time).now();
+      if (now.is_valid())
+        it.strftime(304, 12, id(f_small), id(c_soft), TextAlign::TOP_RIGHT, "%a %d %b", now);
+      it.line(16, 34, 304, 34, id(c_ink));
+
+      // Setup guide: shown until the board is on WiFi AND has a token. Tap to page through.
+      bool wifi_ok = wifi::global_wifi_component->is_connected();
+      bool tok_ok = !id(warden_token).state.empty();
+      if (!wifi_ok || !tok_ok) {
+        int pg = id(g_page);
+        if (pg > 0) it.printf(304, 214, id(f_small), id(c_soft), TextAlign::TOP_RIGHT, "%d / 4", pg);
+        it.print(16, 214, id(f_small), id(c_soft), pg < 4 ? "tap for next" : "tap to start over");
+        if (pg == 0) {
+          it.print(16, 56, id(f_med), id(c_ink), "Hello.");
+          it.print(16, 92, id(f_small), id(c_soft), "Four quick steps to set");
+          it.print(16, 110, id(f_small), id(c_soft), "this display up.");
+          it.print(16, 140, id(f_small), id(c_ink), "Tap the screen to begin.");
+        } else if (pg == 1) {
+          it.print(16, 50, id(f_med), id(c_ink), "1. WiFi");
+          if (wifi_ok) {
+            it.print(16, 92, id(f_small), id(c_ink), "Done - on WiFi at");
+            it.printf(16, 110, id(f_small), id(c_ink), "%s", id(ip).state.c_str());
+          } else {
+            it.print(16, 92, id(f_small), id(c_soft), "On your phone, join WiFi");
+            it.print(16, 110, id(f_small), id(c_ink), "homelab-glance setup");
+            it.print(16, 128, id(f_small), id(c_soft), "then pick your home WiFi");
+            it.print(16, 146, id(f_small), id(c_soft), "and enter its password.");
+          }
+        } else if (pg == 2) {
+          it.print(16, 50, id(f_med), id(c_ink), "2. Make a token");
+          it.print(16, 92, id(f_small), id(c_soft), "In warden, go to");
+          it.print(16, 110, id(f_small), id(c_ink), "Settings > Connect");
+          it.print(16, 128, id(f_small), id(c_ink), "> New token");
+          it.print(16, 146, id(f_small), id(c_soft), "name it homelab-glance, copy it.");
+        } else if (pg == 3) {
+          it.print(16, 50, id(f_med), id(c_ink), "3. Paste it here");
+          it.print(16, 92, id(f_small), id(c_soft), "On the same WiFi, open");
+          if (wifi_ok) it.printf(16, 110, id(f_small), id(c_ink), "http://%s", id(ip).state.c_str());
+          it.print(16, 128, id(f_small), id(c_ink), "http://homelab-glance.local");
+          it.print(16, 146, id(f_small), id(c_soft), "paste into Warden token, Enter.");
+        } else {
+          it.print(16, 50, id(f_med), id(c_ink), "4. Done");
+          it.print(16, 92, id(f_small), id(c_soft), "Once WiFi + token are in,");
+          it.print(16, 110, id(f_small), id(c_soft), "this switches to the glance");
+          it.print(16, 128, id(f_small), id(c_soft), "by itself.");
+          if (!wifi_ok) it.print(16, 160, id(f_small), id(c_red), "Still waiting for WiFi.");
+          else it.print(16, 160, id(f_small), id(c_red), "Still waiting for the token.");
+        }
+        return;
+      }
+
+      // The glance.
+      it.printf(16, 44, id(f_big), id(c_ink), "%d", id(g_wait));
+      it.print(16, 102, id(f_small), id(c_soft), "waiting for you");
+      it.printf(172, 44, id(f_big), id(g_kev) > 0 ? id(c_red) : id(c_ink), "%d", id(g_kev));
+      it.print(172, 102, id(f_small), id(c_soft), "known-exploited");
+      it.line(16, 130, 304, 130, id(c_soft));
+      it.printf(16, 144, id(f_med), id(c_ink), "%s", id(g_mode).c_str());
+      it.print(16, 172, id(f_small), id(c_soft), "mode");
+
+      int s = id(g_status);
+      if (s == 200 && now.is_valid())
+        it.strftime(16, 212, id(f_small), id(c_soft), "updated %H:%M", now);
+      else if (s == 401 || s == 403)
+        it.print(16, 212, id(f_small), id(c_red), "token rejected - paste a new one");
+      else if (s == 0)
+        it.print(16, 212, id(f_small), id(c_soft), "checking warden...");
+      else
+        it.print(16, 212, id(f_small), id(c_red), "can't reach warden");
