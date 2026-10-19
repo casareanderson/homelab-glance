@@ -2,54 +2,149 @@
 
 A desk display for the homelab: an **ESP32-2432S028R ("Cheap Yellow Display", CYD)**,
 2.8" 320×240 with touch, styled like e-ink (paper, black ink, one red ink, serif numbers, dim backlight).
-**Tap to flip pages:**
 
-| Page | Shows |
-|---|---|
-| **Warden** | waiting for you · known-exploited CVEs (red when > 0) · mode · open findings · hot hosts |
-| **Buses** | next TfL route 20 each way from Chandler Road (to Loughton / to Debden), counting down |
-| **Homelab** | nodes up (Beszel) · services up (Uptime Kuma) · backups fresh · busiest CPU / RAM / disk · what's down |
-| **Network** | internet up + ping · devices on the LAN · CrowdSec bans · warden events today |
+![Four display pages rendered from the live feed, 2026-10-19](docs/display-pages.png)
 
-## How it works
-```
-warden, TfL, Beszel, Kuma, backups, nmap ──> glance-feed (Hermes, every 60 s) ──> glance.json ──> board (every 30 s)
-```
-The board makes **one plain-HTTP request on the LAN** (`http://192.168.8.120:8798/glance.json`, ~400 bytes).
-Hermes does all the slow work (TLS, logins, scans), so the board never blocks, which was what tripped the
-ESP's 5 s watchdog and made it restart and blink. **No tokens live on the board.** Slow sources are cached
-(Kuma and the LAN scan every 5 min, backups every 30 min), and a failing source just drops off its page.
-The screen only redraws when the data changes, plus once a minute for the bus countdown.
+*Pages rendered with the real board colour layout and the feed data captured on 2026-10-19.*
 
-`feed/` holds the Hermes side: `glance-feed.py` + a systemd timer, and a tiny read-only LAN web server
-(`glance-feed-http.service`, bound to Hermes' LAN IP).
+## What it does
 
-## Build & flash
+- **Tap to flip four pages** — Warden, Buses, Homelab, Network — each showing a different slice of the homelab.
+- **Warden page:** items "waiting for you", known-exploited CVEs (red when > 0), mode, open findings, hot hosts, pending patches and reboots.
+- **Buses page:** next TfL route 20 from Chandler Road each way (to Loughton / to Debden), counting down.
+- **Homelab page:** nodes up (Beszel) · services up (Uptime Kuma) · backups fresh · busiest CPU / RAM / disk · what is down.
+- **Network page:** internet up + latency · devices on the LAN · CrowdSec bans · warden events today.
+- **Safe by design:** no tokens live on the board; a failing source drops off its page instead of breaking the feed.
+
+## Screenshots / demo
+
+The screen makes one plain-HTTP request on the LAN (`http://192.168.8.120:8798/glance.json`,
+~400 bytes) every 30 seconds. Hermes does the slow work (TLS, logins, scans) in `feed/glance-feed.py`;
+the board only redraws when the data changes, plus once a minute for the bus countdown.
+The four pages above are drawn exactly as the board draws them, from the feed captured on 2026-10-19.
+
+## Quick start
+
+Prerequisites:
+
+- Python 3 and `esphome` (install into a venv, see below)
+- A CYD board (ESP32-2432S028R) and a micro-USB cable for the first flash
+- A GitHub clone of this repo
+
+From a fresh clone:
+
 ```bash
 python3 -m venv ~/esphome-venv && source ~/esphome-venv/bin/activate && pip install esphome
 gh repo clone casareanderson/homelab-glance && cd homelab-glance
 cp secrets.yaml.example secrets.yaml      # fill in wifi_ssid + wifi_password
 esphome run glance-home.yaml              # USB the first time, WiFi (OTA) after that
 ```
-`secrets.yaml` is gitignored. `glance-flash.yaml` is the same build without WiFi baked in. On first boot it
-opens a hotspot, **homelab-glance setup**, so you can pick a network from your phone.
 
-## Notes
-- **Board variant:** the default is the two-USB CYD (micro-USB + USB-C, ST7789V). Others:
-  `-s display_model ESP32-2432S028` (micro-USB only, ILI9341) or `-s display_model ESP32-2432S028-9342`.
-  Fuzzy static = wrong variant. Paper looks dark or colours look negative? Add `-s invert_colors true`.
-- The display uses ESPHome's `mipi_spi` driver, which draws in strips. A full-screen buffer won't fit in this
-  ESP32's RAM ("Could not allocate buffer for display").
-- The `gpio_pullup_en … input-only pad` line at boot is the touch IRQ pin (GPIO36) and is harmless.
-- **Bus stops / feed URL** are `substitutions:` at the top of `glance-flash.yaml` (labels) and constants at the
-  top of `feed/glance-feed.py` (stop IDs). Find stops with
-  `curl "https://api.tfl.gov.uk/StopPoint/?lat=LAT&lon=LON&stopTypes=NaptanPublicBusCoachTram&radius=400"`.
-- Not shown, on purpose: AdGuard stats (the GL.iNet build ties its API to the router UI session, 401) and
-  NetBird peers (it only counts peers with a live tunnel, so "1/9" would look like an outage).
-- The board's page (`http://homelab-glance.local`) has the backlight slider and live logs. It's LAN-only, and
-  OTA has no password, so keep the display on the trusted LAN.
-- `glance.yaml` + `ha/` are the older Home-Assistant-driven build.
-- **True e-paper:** the same feed works on a LilyGo T5 4.7" or a Waveshare e-paper + ESP32 with only the
-  `display:` block swapped.
+`secrets.yaml` is gitignored. On first boot the board opens a hotspot called **homelab-glance setup**
+so you can pick your network from your phone, then fetches its feed. Success looks like the four
+pages rendering with live numbers and a clock in the top-right corner.
 
-AGPL-3.0 · part of the C1 Lab homelab.
+## Usage
+
+The common flows:
+
+```bash
+# Build and flash with WiFi baked in (no on-device setup)
+esphome run glance-home.yaml
+
+# Flash the same build, letting the board's hotspot configure WiFi
+esphome run glance-flash.yaml
+
+# Different display variant (see Configuration) or inverted colours
+esphome -s display_model ESP32-2432S028 run glance-flash.yaml
+esphome -s invert_colors true run glance-home.yaml
+
+# Serve the feed board-side (Hermes): timer runs glance-feed.py every 60 s,
+# glance-feed-http binds to 192.168.8.120:8798 and serves only /var/lib/glance-feed
+```
+
+On the board page (`http://homelab-glance.local`) you get a backlight slider and live logs.
+`feed/glance-feed.py` gathers everything each minute and the HTTP service lets the board
+pull one small JSON over the LAN.
+
+## Configuration
+
+`glance-home.yaml` and `glance-flash.yaml` are ESPHome builds. Secrets live in `secrets.yaml`
+(gitignored, copied from `secrets.yaml.example`) and are read as ESPHome `!secret` values.
+`feed/glance-feed.py` reads environment and configuration at run time.
+
+| Key / variable | Where | Default | Purpose |
+|---|---|---|---|
+| `wifi_ssid` | `secrets.yaml` | — | Network SSID for `glance-home.yaml` |
+| `wifi_password` | `secrets.yaml` | — | Network password |
+| `api_key` / `ota_password` | `secrets.yaml` | — | Only the older `glance.yaml` (Home Assistant) build |
+| `WARDEN_TOKEN` | env (`feed/glance-feed.py`) | read from `/root/.hermes/profiles/sec/.env` | Bearer token for warden's API (never on the board) |
+| `feed_url` | substitution in `glance-flash.yaml` | `http://192.168.8.120:8798/glance.json` | Where the board fetches the feed |
+| `display_model` | substitution | `ESP32-2432S028-7789` | Board preset: `ESP32-2432S028-7789`, `-9342` or `ESP32-2432S028` |
+| `invert_colors` | substitution | `false` | `true` if paper looks dark or colours look negative |
+| `bus_header`, `bus_label_a`, `bus_label_b` | substitutions | `BUS 20 - CHANDLER RD`, `to Loughton`, `to Debden` | Buses page labels |
+| bus stop IDs | constant at top of `feed/glance-feed.py` | `150042006003` / `150042006004` | TfL stop references for each direction |
+
+## How it works
+
+```
+warden, TfL, Beszel, Kuma, backups, nmap ──> glance-feed (Hermes, every 60 s) ──> glance.json ──> board (every 30 s)
+```
+
+```mermaid
+graph LR
+  W[warden API] -->|every 60s| F[feed/glance-feed.py]
+  T[TfL route 20] --> F
+  B[Beszel snapshot] --> F
+  K[Uptime Kuma] -->|every 5 min| F
+  A[backups verify] -->|every 30 min| F
+  N[nmap LAN scan] -->|every 5 min| F
+  F --> J[(glance.json)]
+  J -->|plain HTTP, ~400 B| D[ESP32 CYD display]
+```
+
+Hermes does all the slow work (TLS, logins, scans), so the board never blocks, which was what
+tripped the ESP's 5-second watchdog and made it restart and blink. Slow sources are cached
+(Kuma and the LAN scan every 5 minutes, backups every 30 minutes), and a failing source returns
+`null` instead of breaking the feed. The display uses ESPHome's `mipi_spi` driver, which draws in
+strips (~20 KB buffer) because a full 320×240 16-bit frame (150 KB) does not fit in this
+PSRAM-less ESP32's RAM.
+
+Project structure:
+
+```
+homelab-glance/
+├── glance-flash.yaml      # reference ESPHome build (hotspot setup, all pages)
+├── glance-home.yaml       # WiFi baked in at build time (packages glance-flash.yaml)
+├── glance.yaml            # older Home-Assistant-driven build
+├── secrets.yaml.example   # template for secrets.yaml (gitignored)
+├── feed/
+│   ├── glance-feed.py     # gathers facts each minute -> glance.json
+│   ├── glance-feed.service / .timer   # systemd timer (every 60 s)
+│   └── glance-feed-http.service       # LAN HTTP server on 192.168.8.120:8798
+├── ha/warden-glance-sensors.yaml      # Home Assistant sensors for the older build
+└── docs/display-pages.png             # rendering of the real feed, 2026-10-19
+```
+
+## Status, limits and real results
+
+From the live feed captured on 2026-10-19 (a real run of `feed/glance-feed.py`):
+
+- **Warden:** 50 approvals waiting, 4 known-exploited CVEs, mode `detect-only`, 8 open findings, 1 hot host, 7 CrowdSec bans, 461 events in 24 h.
+- **Buses:** route 20 from Chandler Road — next in ~1 min toward Loughton, next in ~4 min toward Debden; back to back after each.
+- **Homelab:** 8/8 Beszel nodes up; 39/40 monitors up (one down: Cloudflare); 8 backups fresh, 0 stale, 0 missing; busiest CPU ZimaBlade 37%, RAM C1-G4 61%, disk hermes 88%.
+- **Network:** internet up, 14 ms, 0% packet loss; 56 devices on the LAN.
+
+Known limits and non-goals:
+
+- Full-screen display buffer does not fit in this ESP32's RAM; the `mipi_spi` strip buffer is used instead.
+- **AdGuard stats are not shown** — the GL.iNet build ties its API to the router UI session (returns 401).
+- **NetBird peers are not shown** — it only counts peers with a live tunnel, so a partial "1/9" could read like an outage.
+- **OTA has no password** — keep the display on the trusted LAN only.
+- **Metrics above are point-in-time** from the dated feed, not a rolling benchmark; the display shows live numbers every 30 seconds.
+
+## Licence and credits
+
+AGPL-3.0 · part of the C1 Lab homelab. Bus data © Transport for London (TfL), used under
+their open-data terms. Display fonts are the Google Fonts `Libre Baskerville`, `IBM Plex Mono`
+and (older build) `Roboto`, rendered by ESPHome's `gfonts://` provider.
