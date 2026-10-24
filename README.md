@@ -11,14 +11,14 @@ A desk display for the homelab: an **ESP32-2432S028R ("Cheap Yellow Display", CY
 
 - **Tap to flip four pages** — Warden, Buses, Homelab, Network — each showing a different slice of the homelab.
 - **Warden page:** items "waiting for you", known-exploited CVEs (red when > 0), mode, open findings, hot hosts, pending patches and reboots.
-- **Buses page:** next TfL route 20 from Chandler Road each way (to Loughton / to Debden), counting down.
+- **Buses page:** next TfL route 20 from Main Street each way (to town / to station), counting down.
 - **Homelab page:** nodes up (Beszel) · services up (Uptime Kuma) · backups fresh · busiest CPU / RAM / disk · what is down.
 - **Network page:** internet up + latency · devices on the LAN · CrowdSec bans · warden events today.
 - **Safe by design:** no tokens live on the board; a failing source drops off its page instead of breaking the feed.
 
 ## Screenshots / demo
 
-The screen makes one plain-HTTP request on the LAN (`http://192.168.8.120:8798/glance.json`,
+The screen makes one plain-HTTP request on the LAN (`http://192.0.2.40:8798/glance.json`,
 ~400 bytes) every 30 seconds. Hermes does the slow work (TLS, logins, scans) in `feed/glance-feed.py`;
 the board only redraws when the data changes, plus once a minute for the bus countdown.
 The four pages above are drawn exactly as the board draws them, from the feed captured on 2026-10-19.
@@ -60,7 +60,7 @@ esphome -s display_model ESP32-2432S028 run glance-flash.yaml
 esphome -s invert_colors true run glance-home.yaml
 
 # Serve the feed board-side (Hermes): timer runs glance-feed.py every 60 s,
-# glance-feed-http binds to 192.168.8.120:8798 and serves only /var/lib/glance-feed
+# glance-feed-http binds to 192.0.2.40:8798 and serves only /var/lib/glance-feed
 ```
 
 On the board page (`http://homelab-glance.local`) you get a backlight slider and live logs.
@@ -79,11 +79,11 @@ pull one small JSON over the LAN.
 | `wifi_password` | `secrets.yaml` | — | Network password |
 | `api_key` / `ota_password` | `secrets.yaml` | — | Only the older `glance.yaml` (Home Assistant) build |
 | `WARDEN_TOKEN` | env (`feed/glance-feed.py`) | read from `/root/.hermes/profiles/sec/.env` | Bearer token for warden's API (never on the board) |
-| `feed_url` | substitution in `glance-flash.yaml` | `http://192.168.8.120:8798/glance.json` | Where the board fetches the feed |
+| `feed_url` | substitution in `glance-flash.yaml` | `http://192.0.2.40:8798/glance.json` | Where the board fetches the feed |
 | `display_model` | substitution | `ESP32-2432S028-7789` | Board preset: `ESP32-2432S028-7789`, `-9342` or `ESP32-2432S028` |
 | `invert_colors` | substitution | `false` | `true` if paper looks dark or colours look negative |
-| `bus_header`, `bus_label_a`, `bus_label_b` | substitutions | `BUS 20 - CHANDLER RD`, `to Loughton`, `to Debden` | Buses page labels |
-| bus stop IDs | constant at top of `feed/glance-feed.py` | `150042006003` / `150042006004` | TfL stop references for each direction |
+| `bus_header`, `bus_label_a`, `bus_label_b` | substitutions | `BUS 20 - MAIN ST`, `to town`, `to station` | Buses page labels |
+| bus stop IDs | constant at top of `feed/glance-feed.py` | `YOUR_STOP_A` / `YOUR_STOP_B` | TfL stop references for each direction |
 
 ## How it works
 
@@ -121,7 +121,7 @@ homelab-glance/
 ├── feed/
 │   ├── glance-feed.py     # gathers facts each minute -> glance.json
 │   ├── glance-feed.service / .timer   # systemd timer (every 60 s)
-│   └── glance-feed-http.service       # LAN HTTP server on 192.168.8.120:8798
+│   └── glance-feed-http.service       # LAN HTTP server on 192.0.2.40:8798
 ├── ha/warden-glance-sensors.yaml      # Home Assistant sensors for the older build
 └── docs/display-pages.png             # rendering of the real feed, 2026-10-19
 ```
@@ -131,8 +131,8 @@ homelab-glance/
 From the live feed captured on 2026-10-19 (a real run of `feed/glance-feed.py`):
 
 - **Warden:** 50 approvals waiting, 4 known-exploited CVEs, mode `detect-only`, 8 open findings, 1 hot host, 7 CrowdSec bans, 461 events in 24 h.
-- **Buses:** route 20 from Chandler Road — next in ~1 min toward Loughton, next in ~4 min toward Debden; back to back after each.
-- **Homelab:** 8/8 Beszel nodes up; 39/40 monitors up (one down: Cloudflare); 8 backups fresh, 0 stale, 0 missing; busiest CPU ZimaBlade 37%, RAM C1-G4 61%, disk hermes 88%.
+- **Buses:** route 20 from Main Street — next in ~1 min toward town, next in ~4 min toward station; back to back after each.
+- **Homelab:** 8/8 Beszel nodes up; 39/40 monitors up (one down: Cloudflare); 8 backups fresh, 0 stale, 0 missing; busiest CPU NAS 37%, RAM Node 1 61%, disk agents 88%.
 - **Network:** internet up, 14 ms, 0% packet loss; 56 devices on the LAN.
 
 Known limits and non-goals:

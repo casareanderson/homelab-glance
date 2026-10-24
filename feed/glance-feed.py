@@ -23,11 +23,11 @@ sys.path.insert(0, "/root/.hermes/scripts")
 OUT_DIR = "/var/lib/glance-feed"
 OUT = f"{OUT_DIR}/glance.json"
 CACHE = "/var/cache/glance-feed.json"  # kept out of the served dir
-WARDEN = "https://warden.cn1-lab.uk/api/v1/summary"
+WARDEN = "https://warden.example.com/api/v1/summary"
 TFL = "https://api.tfl.gov.uk/StopPoint/{}/Arrivals"
 BUS_LINE = "20"
-BUS_STOPS = {"a": "150042006003", "b": "150042006004"}  # Chandler Rd: to Loughton / to Debden
-LAN = "192.168.8.0/24"
+BUS_STOPS = {"a": "YOUR_STOP_A", "b": "YOUR_STOP_B"}  # Main St: to town / to station
+LAN = "192.0.2.0/24"
 SLOW = {"kuma": 300, "backup": 1800, "lan": 300, "patches": 900}  # seconds between refreshes
 
 

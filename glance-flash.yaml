@@ -4,10 +4,10 @@
 # backups, LAN scan. Tap the screen to flip pages: Warden / Buses / Homelab / Network.
 # WiFi: baked in by glance-home.yaml, or set on first boot (hotspot "homelab-glance setup").
 substitutions:
-  feed_url: "http://192.168.8.120:8798/glance.json"
-  bus_header: "BUS 20 - CHANDLER RD"
-  bus_label_a: "to Loughton"
-  bus_label_b: "to Debden"
+  feed_url: "http://192.0.2.40:8798/glance.json"
+  bus_header: "BUS 20 - MAIN ST"
+  bus_label_a: "to town"
+  bus_label_b: "to station"
   # Board preset (ESPHome mipi_spi). The CYD comes in three flavours:
   #   ESP32-2432S028-7789  micro-USB + USB-C, ST7789V   (default)
   #   ESP32-2432S028-9342  micro-USB + USB-C, ILI9342

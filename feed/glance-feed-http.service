@@ -3,7 +3,7 @@ Description=glance-feed: serve glance.json to the desk display (LAN only, read-o
 After=network-online.target
 
 [Service]
-ExecStart=/usr/bin/python3 -m http.server 8798 --bind 192.168.8.120 --directory /var/lib/glance-feed
+ExecStart=/usr/bin/python3 -m http.server 8798 --bind 192.0.2.40 --directory /var/lib/glance-feed
 DynamicUser=yes
 Restart=always
 RestartSec=5

@@ -5,7 +5,7 @@
 # warden's /api/v1 skips SSO (bearer-token auth), so this works on the LAN.
 
 rest:
-  - resource: "https://warden.cn1-lab.uk/api/v1/summary"
+  - resource: "https://warden.example.com/api/v1/summary"
     scan_interval: 60
     headers:
       Authorization: !secret warden_bearer
@@ -25,7 +25,7 @@ rest:
         value_template: "{{ value_json.kpi.ids_24h | int(0) }}"
         icon: mdi:radar
     binary_sensor: []
-  - resource: "https://warden.cn1-lab.uk/api/v1/summary"
+  - resource: "https://warden.example.com/api/v1/summary"
     scan_interval: 60
     headers:
       Authorization: !secret warden_bearer
